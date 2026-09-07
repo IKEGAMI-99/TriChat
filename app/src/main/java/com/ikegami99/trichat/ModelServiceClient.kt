@@ -1,5 +1,6 @@
 package com.ikegami99.trichat
 
+import android.app.Service
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
@@ -14,7 +15,7 @@ import kotlin.reflect.KClass
 
 class ModelServiceClient(
     private val context: Context,
-    private val serviceClass: KClass<out BaseModelService>,
+    private val serviceClass: KClass<out Service>,
     private val label: String,
     private val logs: LogStore
 ) {

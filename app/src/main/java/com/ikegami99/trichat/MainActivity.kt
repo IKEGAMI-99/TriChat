@@ -17,6 +17,8 @@ import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.widget.SwitchCompat
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -27,7 +29,7 @@ class MainActivity : AppCompatActivity() {
     companion object {
         const val QWEN_URL = "https://huggingface.co/bartowski/Qwen_Qwen3.5-2B-GGUF/resolve/main/Qwen3.5-2B-Q4_K_M.gguf?download=true"
         const val GEMMA_URL = "https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it.litertlm?download=true"
-        private const val QWEN_SYSTEM = "あなたはTriChatのQwenです。技術・論理・実現可能性を担当します。思考過程やCoTは出力せず、結論と根拠だけを短く自然な日本語で答えてください。"
+        private const val QWEN_SYSTEM = "あなたはTriChatのQwenです。技術・論理・実現可能性を担当します。内部の思考過程は回答に含めず、結論と根拠だけを短く自然な日本語で答えてください。"
         private const val GEMMA_SYSTEM = "あなたはTriChatのGemmaです。批評・反論・別視点・改善案を担当します。思考過程やCoTは出力せず、結論と根拠だけを短く自然な日本語で答えてください。"
     }
 
@@ -65,7 +67,7 @@ class MainActivity : AppCompatActivity() {
         gemma.bind { refreshStatus(); maybeAutoLoad() }
         logs.i("APP", "started ${BuildConfig.VERSION_NAME}")
         val legacyGemma = File(File(filesDir, "models"), "gemma.gguf")
-        if (legacyGemma.exists()) logs.i("GEMMA", "legacy GGUF ignored in v0.1.4; import gemma-4-E2B-it.litertlm")
+        if (legacyGemma.exists()) logs.i("GEMMA", "legacy GGUF ignored; import gemma-4-E2B-it.litertlm")
         UpdateManager(this, logs).check(silent = true)
     }
 
@@ -75,6 +77,19 @@ class MainActivity : AppCompatActivity() {
             setPadding(dp(14), dp(14), dp(14), dp(10))
             setBackgroundColor(Color.rgb(13, 17, 23))
         }
+        ViewCompat.setOnApplyWindowInsetsListener(root) { view, insets ->
+            val bars = insets.getInsets(
+                WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout()
+            )
+            view.setPadding(
+                dp(14) + bars.left,
+                dp(14) + bars.top,
+                dp(14) + bars.right,
+                dp(10) + bars.bottom,
+            )
+            insets
+        }
+
         val title = TextView(this).apply {
             text = "TriChat  •  LOCAL AI MEETING"
             setTextColor(Color.WHITE); textSize = 20f
@@ -87,7 +102,7 @@ class MainActivity : AppCompatActivity() {
         tools.addView(Button(this).apply { text = "モデル"; setOnClickListener { showModelDialog() } }, LinearLayout.LayoutParams(0, dp(48), 1f))
         tools.addView(Button(this).apply { text = "ログ"; setOnClickListener { logs.i("LOG", "export requested"); logExporter.launch("TriChat-${BuildConfig.VERSION_NAME}.log.txt") } }, LinearLayout.LayoutParams(0, dp(48), 1f))
         tools.addView(Button(this).apply { text = "更新"; setOnClickListener { UpdateManager(this@MainActivity, logs).check(false) } }, LinearLayout.LayoutParams(0, dp(48), 1f))
-        parallel = SwitchCompat(this).apply { text = "並列"; setTextColor(Color.WHITE); setPadding(dp(8),0,0,0) }
+        parallel = SwitchCompat(this).apply { text = "並列"; setTextColor(Color.WHITE); setPadding(dp(8), 0, 0, 0) }
         tools.addView(parallel)
         root.addView(tools)
 
@@ -95,18 +110,19 @@ class MainActivity : AppCompatActivity() {
         chat = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(0, dp(8), 0, dp(8)) }
         chatScroll.addView(chat)
         root.addView(chatScroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
-        addBubble("SYSTEM", "Qwen3.5 2B (llama.cpp) + Gemma 4 E2B (LiteRT-LM)。両方ロードすると3人会議を開始できます。", Color.rgb(35,39,47))
+        addBubble("SYSTEM", "Qwen3.5 2B (llama.cpp) + Gemma 4 E2B (LiteRT-LM)。両方ロードすると3人会議を開始できます。", Color.rgb(35, 39, 47))
 
         val bottom = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.BOTTOM }
         input = EditText(this).apply {
             hint = "議題を入力…"; setHintTextColor(Color.GRAY); setTextColor(Color.WHITE); minLines = 1; maxLines = 5
-            setBackgroundColor(Color.rgb(22,27,34)); setPadding(dp(12), dp(8), dp(12), dp(8))
+            setBackgroundColor(Color.rgb(22, 27, 34)); setPadding(dp(12), dp(8), dp(12), dp(8))
         }
         send = Button(this).apply { text = "送信"; setOnClickListener { sendMessage() } }
         bottom.addView(input, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         bottom.addView(send)
         root.addView(bottom)
         setContentView(root)
+        ViewCompat.requestApplyInsets(root)
     }
 
     private fun showModelDialog() {
@@ -185,20 +201,28 @@ class MainActivity : AppCompatActivity() {
         if (text.isEmpty() || busy) return
         if (!qwen.isLoaded || !gemma.isLoaded) { Toast.makeText(this, "QwenとGemmaの両方をロードしてください", Toast.LENGTH_SHORT).show(); return }
         input.setText(""); busy = true; send.isEnabled = false
-        addBubble("YOU", text, Color.rgb(42,34,66))
+        addBubble("YOU", text, Color.rgb(42, 34, 66))
         logs.i("USER", text.take(500))
         if (parallel.isChecked) runParallel(text) else runMeeting(text)
     }
 
     private fun runMeeting(user: String) {
-        val qView = addBubble("QWEN", "", Color.rgb(15,41,66)); val qBuf = StringBuilder()
+        val qView = addBubble("QWEN", "", Color.rgb(15, 41, 66)); val qBuf = StringBuilder()
         val context = if (lastGemma.isBlank()) "" else "前回のGemmaの発言:\n$lastGemma\n\n"
         qwen.generate("${context}ユーザー: $user\n会議参加者として簡潔に答えてください。", 256, { t -> qBuf.append(t); qView.text = "QWEN\n$qBuf"; scrollBottom() }) { err ->
-            if (err != null) { qView.append("\n[ERROR] $err"); finishTurn(); return@generate }
+            if (err != null) {
+                logs.i("QWEN", "generation ended: $err")
+                if (qBuf.isEmpty()) qView.append("\n[ERROR] $err")
+                finishTurn()
+                return@generate
+            }
             logs.i("QWEN", qBuf.toString().take(1000))
-            val gView = addBubble("GEMMA", "", Color.rgb(25,51,31)); val gBuf = StringBuilder()
+            val gView = addBubble("GEMMA", "", Color.rgb(25, 51, 31)); val gBuf = StringBuilder()
             gemma.generate("ユーザー: $user\nQwen: $qBuf\nQwenの意見を踏まえ、同意・反論・改善案のどれかを含めて簡潔に答えてください。", 256, { t -> gBuf.append(t); gView.text = "GEMMA\n$gBuf"; scrollBottom() }) { gErr ->
-                if (gErr != null) gView.append("\n[ERROR] $gErr")
+                if (gErr != null) {
+                    logs.i("GEMMA", "generation ended: $gErr")
+                    if (gBuf.isEmpty()) gView.append("\n[ERROR] $gErr")
+                }
                 lastGemma = gBuf.toString(); logs.i("GEMMA", lastGemma.take(1000)); finishTurn()
             }
         }
@@ -207,13 +231,23 @@ class MainActivity : AppCompatActivity() {
     private fun runParallel(user: String) {
         var done = 0
         fun mark() { done++; if (done >= 2) finishTurn() }
-        val qView = addBubble("QWEN", "", Color.rgb(15,41,66)); val qBuf = StringBuilder()
-        val gView = addBubble("GEMMA", "", Color.rgb(25,51,31)); val gBuf = StringBuilder()
-        qwen.generate(user, 256, { t -> qBuf.append(t); qView.text = "QWEN\n$qBuf"; scrollBottom() }) { err -> if (err != null) qView.append("\n[ERROR] $err"); logs.i("QWEN", qBuf.toString().take(1000)); mark() }
-        gemma.generate(user, 256, { t -> gBuf.append(t); gView.text = "GEMMA\n$gBuf"; scrollBottom() }) { err -> if (err != null) gView.append("\n[ERROR] $err"); lastGemma = gBuf.toString(); logs.i("GEMMA", lastGemma.take(1000)); mark() }
+        val qView = addBubble("QWEN", "", Color.rgb(15, 41, 66)); val qBuf = StringBuilder()
+        val gView = addBubble("GEMMA", "", Color.rgb(25, 51, 31)); val gBuf = StringBuilder()
+        qwen.generate(user, 256, { t -> qBuf.append(t); qView.text = "QWEN\n$qBuf"; scrollBottom() }) { err ->
+            if (err != null) { logs.i("QWEN", "generation ended: $err"); if (qBuf.isEmpty()) qView.append("\n[ERROR] $err") }
+            logs.i("QWEN", qBuf.toString().take(1000)); mark()
+        }
+        gemma.generate(user, 256, { t -> gBuf.append(t); gView.text = "GEMMA\n$gBuf"; scrollBottom() }) { err ->
+            if (err != null) { logs.i("GEMMA", "generation ended: $err"); if (gBuf.isEmpty()) gView.append("\n[ERROR] $err") }
+            lastGemma = gBuf.toString(); logs.i("GEMMA", lastGemma.take(1000)); mark()
+        }
     }
 
-    private fun finishTurn() { busy = false; send.isEnabled = true; scrollBottom() }
+    private fun finishTurn() {
+        busy = false
+        send.isEnabled = true
+        scrollBottom()
+    }
 
     private fun addBubble(author: String, body: String, color: Int): TextView {
         val v = TextView(this).apply {

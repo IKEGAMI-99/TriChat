@@ -10,7 +10,6 @@ import android.os.Message
 import android.os.Messenger
 import com.google.ai.edge.litertlm.Backend
 import com.google.ai.edge.litertlm.Contents
-import com.google.ai.edge.litertlm.Conversation
 import com.google.ai.edge.litertlm.ConversationConfig
 import com.google.ai.edge.litertlm.Engine
 import com.google.ai.edge.litertlm.EngineConfig
@@ -21,22 +20,22 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import java.io.File
 
 /**
  * Gemma 4 E2B runtime backed by Google's LiteRT-LM.
  *
- * We intentionally do not use llama.cpp for Gemma here. On Android the official
- * Gemma 4 E2B GGUF repeatedly killed the isolated service during native model
- * loading, while LiteRT-LM is the Android-first runtime and model format Google
- * ships for Gemma 4.
+ * The Engine stays resident for the lifetime of the service. A short-lived
+ * Conversation is created per TriChat turn and closed immediately afterwards.
+ * This avoids keeping KV/history allocations around and also avoids the async
+ * JNI callback path that was killing the :gemma process after each response on
+ * some Android devices.
  */
 class GemmaModelService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var engine: Engine? = null
-    private var conversation: Conversation? = null
+    private var systemPrompt: String = ""
 
     private val messenger by lazy {
         Messenger(Handler(Looper.getMainLooper()) { msg ->
@@ -62,7 +61,7 @@ class GemmaModelService : Service() {
         }
         val expected = "LITERTLM".toByteArray(Charsets.US_ASCII)
         require(magic.contentEquals(expected)) {
-            "Gemmaは .litertlm 形式を選んでください。旧GGUFはv0.1.4以降では使用しません"
+            "Gemmaは .litertlm 形式を選んでください。旧GGUFは使用しません"
         }
     }
 
@@ -82,24 +81,16 @@ class GemmaModelService : Service() {
                         backend = Backend.CPU(threadCount = 4),
                         visionBackend = null,
                         audioBackend = null,
-                        maxNumTokens = 4096,
+                        // TriChat turns are deliberately short. A 2K context cuts
+                        // resident KV/workspace pressure substantially versus 4K.
+                        maxNumTokens = 2048,
                         cacheDir = File(cacheDir, "gemma4-litertlm").apply { mkdirs() }.absolutePath,
                     )
                 )
                 nextEngine.initialize()
 
-                val nextConversation = nextEngine.createConversation(
-                    ConversationConfig(
-                        systemInstruction = Contents.of(system),
-                        samplerConfig = SamplerConfig(topK = 64, topP = 0.95, temperature = 0.7),
-                        channels = emptyList(),
-                        maxOutputToken = 256,
-                        thinkingConfig = ThinkingConfig(enableThinking = false, thinkingTokenBudget = 0),
-                    )
-                )
-
                 engine = nextEngine
-                conversation = nextConversation
+                systemPrompt = system
                 send(reply, ModelProtocol.MSG_LOADED)
             } catch (t: Throwable) {
                 closeRuntime()
@@ -115,15 +106,35 @@ class GemmaModelService : Service() {
         val prompt = msg.data.getString(ModelProtocol.KEY_PROMPT).orEmpty()
         val maxTokens = msg.data.getInt(ModelProtocol.KEY_MAX_TOKENS, 256)
         scope.launch {
+            val activeEngine = engine
+            if (activeEngine == null) {
+                send(reply, ModelProtocol.MSG_ERROR, Bundle().apply {
+                    putString(ModelProtocol.KEY_ERROR, "Gemma LiteRT-LM model is not loaded")
+                })
+                return@launch
+            }
+
             try {
-                val conv = conversation ?: error("Gemma LiteRT-LM model is not loaded")
-                conv.sendMessageAsync(
-                    text = prompt,
-                    maxOutputToken = maxTokens,
-                    thinkingConfig = ThinkingConfig(enableThinking = false, thinkingTokenBudget = 0),
-                ).collect { chunk ->
-                    val text = chunk.toString()
-                    if (text.isNotEmpty()) {
+                // Keep the model Engine loaded, but do not retain conversation KV/history.
+                // Synchronous inference is intentional here: this coroutine runs on IO,
+                // while avoiding the native async callback lifetime that caused the
+                // service process to die immediately after a streamed response.
+                activeEngine.createConversation(
+                    ConversationConfig(
+                        systemInstruction = Contents.of(systemPrompt),
+                        samplerConfig = SamplerConfig(topK = 64, topP = 0.95, temperature = 0.7),
+                        channels = emptyList(),
+                        maxOutputToken = 256,
+                        thinkingConfig = ThinkingConfig(enableThinking = false, thinkingTokenBudget = 0),
+                    )
+                ).use { conv ->
+                    val response = conv.sendMessage(
+                        text = prompt,
+                        maxOutputToken = maxTokens,
+                        thinkingConfig = ThinkingConfig(enableThinking = false, thinkingTokenBudget = 0),
+                    )
+                    val text = response.toString()
+                    if (text.isNotBlank()) {
                         send(reply, ModelProtocol.MSG_TOKEN, Bundle().apply {
                             putString(ModelProtocol.KEY_TOKEN, text)
                         })
@@ -139,10 +150,9 @@ class GemmaModelService : Service() {
     }
 
     private fun closeRuntime() {
-        conversation?.let { runCatching { it.close() } }
-        conversation = null
         engine?.let { runCatching { it.close() } }
         engine = null
+        systemPrompt = ""
     }
 
     private fun send(target: Messenger, what: Int, data: Bundle = Bundle()) {

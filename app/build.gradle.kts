@@ -12,8 +12,8 @@ android {
         applicationId = "com.ikegami99.trichat"
         minSdk = 33
         targetSdk = 36
-        versionCode = 6
-        versionName = "0.1.5"
+        versionCode = 7
+        versionName = "0.1.6"
     }
 
     buildFeatures {

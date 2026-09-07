@@ -17,6 +17,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import java.io.File
 
 abstract class BaseModelService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -40,14 +41,37 @@ abstract class BaseModelService : Service() {
 
     override fun onBind(intent: Intent?): IBinder = messenger.binder
 
+    private fun validateGguf(path: String) {
+        val file = File(path)
+        require(file.exists()) { "モデルファイルが見つかりません" }
+        require(file.isFile && file.canRead()) { "モデルファイルを読み取れません" }
+        require(file.length() > 16L) { "モデルファイルが小さすぎます" }
+        val magic = ByteArray(4)
+        file.inputStream().use { input ->
+            require(input.read(magic) == 4) { "GGUFヘッダーを読み取れません" }
+        }
+        require(magic.contentEquals(byteArrayOf('G'.code.toByte(), 'G'.code.toByte(), 'U'.code.toByte(), 'F'.code.toByte()))) {
+            "GGUF形式ではありません。アプリ内リンクから .gguf 本体を選んでください"
+        }
+    }
+
     private fun handleLoad(msg: Message) {
         val reply = msg.replyTo ?: return
         val path = msg.data.getString(ModelProtocol.KEY_PATH).orEmpty()
         val system = msg.data.getString(ModelProtocol.KEY_SYSTEM).orEmpty()
         scope.launch {
             try {
-                engine.state.first { it is InferenceEngine.State.Initialized || it is InferenceEngine.State.ModelReady || it is InferenceEngine.State.Error }
-                if (engine.state.value is InferenceEngine.State.ModelReady) engine.cleanUp()
+                validateGguf(path)
+                engine.state.first {
+                    it is InferenceEngine.State.Initialized ||
+                        it is InferenceEngine.State.ModelReady ||
+                        it is InferenceEngine.State.Error
+                }
+                when (engine.state.value) {
+                    is InferenceEngine.State.ModelReady,
+                    is InferenceEngine.State.Error -> engine.cleanUp()
+                    else -> Unit
+                }
                 engine.loadModel(path)
                 engine.setSystemPrompt(system)
                 send(reply, ModelProtocol.MSG_LOADED)

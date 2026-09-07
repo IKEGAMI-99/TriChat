@@ -126,7 +126,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun importModel(uri: Uri, isQwen: Boolean) {
         val label = if (isQwen) "Qwen" else "Gemma"
-        Toast.makeText(this, "$labelモデルを取り込み中…", Toast.LENGTH_SHORT).show()
+        Toast.makeText(this, "${label}モデルを取り込み中…", Toast.LENGTH_SHORT).show()
         lifecycleScope.launch {
             try {
                 val file = withContext(Dispatchers.IO) {
@@ -139,7 +139,7 @@ class MainActivity : AppCompatActivity() {
                 loadOne(isQwen)
             } catch (t: Throwable) {
                 logs.i(label, t.stackTraceToString())
-                Toast.makeText(this@MainActivity, "$labelの取り込みに失敗: ${t.message}", Toast.LENGTH_LONG).show()
+                Toast.makeText(this@MainActivity, "${label}の取り込みに失敗: ${t.message}", Toast.LENGTH_LONG).show()
             }
         }
     }

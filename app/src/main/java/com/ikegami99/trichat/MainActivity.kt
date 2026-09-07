@@ -18,6 +18,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.widget.SwitchCompat
 import androidx.core.view.ViewCompat
+import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
@@ -60,10 +61,18 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        WindowCompat.setDecorFitsSystemWindows(window, false)
         logs = LogStore(this)
         buildUi()
         qwen = ModelServiceClient(this, QwenModelService::class, "QWEN", logs)
-        gemma = ModelServiceClient(this, GemmaModelService::class, "GEMMA", logs)
+        gemma = ModelServiceClient(
+            this,
+            GemmaModelService::class,
+            "GEMMA",
+            logs,
+            important = true,
+            autoRestoreAfterCrash = true,
+        )
         qwen.bind { refreshStatus(); maybeAutoLoad() }
         gemma.bind { refreshStatus(); maybeAutoLoad() }
         logs.i("APP", "started ${BuildConfig.VERSION_NAME}")
@@ -82,12 +91,15 @@ class MainActivity : AppCompatActivity() {
             val bars = insets.getInsets(
                 WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout()
             )
+            val ime = insets.getInsets(WindowInsetsCompat.Type.ime())
+            val bottomInset = maxOf(bars.bottom, ime.bottom)
             view.setPadding(
                 dp(14) + bars.left,
                 dp(14) + bars.top,
                 dp(14) + bars.right,
-                dp(10) + bars.bottom,
+                dp(10) + bottomInset,
             )
+            if (insets.isVisible(WindowInsetsCompat.Type.ime())) scrollBottom()
             insets
         }
 

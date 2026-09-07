@@ -55,6 +55,19 @@ abstract class BaseModelService : Service() {
         }
     }
 
+    private fun backendDiagnostic(): String {
+        val dir = File(applicationInfo.nativeLibraryDir.orEmpty())
+        val entries = runCatching { dir.listFiles()?.map { it.name }?.sorted().orEmpty() }.getOrDefault(emptyList())
+        val cpu = entries.filter { it.startsWith("libggml-cpu-") && it.endsWith(".so") }
+        return buildString {
+            append("nativeLibraryDir=").append(dir.absolutePath)
+            append(" exists=").append(dir.exists())
+            append(" readable=").append(dir.canRead())
+            append(" cpuBackends=").append(cpu.size)
+            if (cpu.isNotEmpty()) append(" [").append(cpu.joinToString()).append(']')
+        }
+    }
+
     private fun handleLoad(msg: Message) {
         val reply = msg.replyTo ?: return
         val path = msg.data.getString(ModelProtocol.KEY_PATH).orEmpty()
@@ -76,7 +89,8 @@ abstract class BaseModelService : Service() {
                 engine.setSystemPrompt(system)
                 send(reply, ModelProtocol.MSG_LOADED)
             } catch (t: Throwable) {
-                send(reply, ModelProtocol.MSG_ERROR, Bundle().apply { putString(ModelProtocol.KEY_ERROR, t.stackTraceToString()) })
+                val detail = t.stackTraceToString() + "\n[BACKEND] " + backendDiagnostic()
+                send(reply, ModelProtocol.MSG_ERROR, Bundle().apply { putString(ModelProtocol.KEY_ERROR, detail) })
             }
         }
     }

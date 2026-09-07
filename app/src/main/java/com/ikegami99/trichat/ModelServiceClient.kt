@@ -45,11 +45,7 @@ class ModelServiceClient(
                 loadCallback = null
             }
             ModelProtocol.MSG_TOKEN -> tokenCallback?.invoke(msg.data.getString(ModelProtocol.KEY_TOKEN).orEmpty())
-            ModelProtocol.MSG_DONE -> {
-                doneCallback?.invoke(null)
-                tokenCallback = null
-                doneCallback = null
-            }
+            ModelProtocol.MSG_DONE -> finishGeneration(null)
             ModelProtocol.MSG_ERROR -> {
                 val err = msg.data.getString(ModelProtocol.KEY_ERROR) ?: "unknown error"
                 logs.i(label, "ERROR $err")
@@ -58,9 +54,7 @@ class ModelServiceClient(
                     loadCallback?.invoke(false, err)
                     loadCallback = null
                 } else {
-                    doneCallback?.invoke(err)
-                    tokenCallback = null
-                    doneCallback = null
+                    finishGeneration(err)
                 }
             }
         }
@@ -90,6 +84,7 @@ class ModelServiceClient(
             isBound = false
             isLoaded = false
             logs.i(label, "service disconnected")
+            failInFlight("$label service disconnected during request")
             scheduleReconnect()
         }
 
@@ -99,6 +94,7 @@ class ModelServiceClient(
             isLoaded = false
             bindingRequested = false
             logs.i(label, "service binding died")
+            failInFlight("$label service binding died during request")
             scheduleReconnect()
         }
 
@@ -108,6 +104,7 @@ class ModelServiceClient(
             isLoaded = false
             bindingRequested = false
             logs.i(label, "service returned null binding")
+            failInFlight("$label service returned null binding")
             scheduleReconnect()
         }
     }
@@ -131,6 +128,20 @@ class ModelServiceClient(
             bindingRequested = false
             bind(onConnected ?: {})
         }, 500L)
+    }
+
+    private fun finishGeneration(error: String?) {
+        val done = doneCallback
+        tokenCallback = null
+        doneCallback = null
+        done?.invoke(error)
+    }
+
+    private fun failInFlight(reason: String) {
+        val load = loadCallback
+        loadCallback = null
+        if (load != null) load(false, reason)
+        finishGeneration(reason)
     }
 
     private fun sendLoad(path: String, systemPrompt: String, callback: (Boolean, String?) -> Unit) {
@@ -189,5 +200,8 @@ class ModelServiceClient(
         isLoaded = false
         remote = null
         pendingLoad = null
+        loadCallback = null
+        tokenCallback = null
+        doneCallback = null
     }
 }

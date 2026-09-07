@@ -26,7 +26,7 @@ import java.io.File
 class MainActivity : AppCompatActivity() {
     companion object {
         const val QWEN_URL = "https://huggingface.co/bartowski/Qwen_Qwen3.5-2B-GGUF/resolve/main/Qwen3.5-2B-Q4_K_M.gguf?download=true"
-        const val GEMMA_URL = "https://huggingface.co/google/gemma-4-E2B-it-qat-q4_0-gguf/resolve/main/gemma-4-E2B_q4_0-it.gguf?download=true"
+        const val GEMMA_URL = "https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it.litertlm?download=true"
         private const val QWEN_SYSTEM = "あなたはTriChatのQwenです。技術・論理・実現可能性を担当します。思考過程やCoTは出力せず、結論と根拠だけを短く自然な日本語で答えてください。"
         private const val GEMMA_SYSTEM = "あなたはTriChatのGemmaです。批評・反論・別視点・改善案を担当します。思考過程やCoTは出力せず、結論と根拠だけを短く自然な日本語で答えてください。"
     }
@@ -64,6 +64,8 @@ class MainActivity : AppCompatActivity() {
         qwen.bind { refreshStatus(); maybeAutoLoad() }
         gemma.bind { refreshStatus(); maybeAutoLoad() }
         logs.i("APP", "started ${BuildConfig.VERSION_NAME}")
+        val legacyGemma = File(File(filesDir, "models"), "gemma.gguf")
+        if (legacyGemma.exists()) logs.i("GEMMA", "legacy GGUF ignored in v0.1.4; import gemma-4-E2B-it.litertlm")
         UpdateManager(this, logs).check(silent = true)
     }
 
@@ -93,7 +95,7 @@ class MainActivity : AppCompatActivity() {
         chat = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(0, dp(8), 0, dp(8)) }
         chatScroll.addView(chat)
         root.addView(chatScroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
-        addBubble("SYSTEM", "Qwen3.5 2B + Gemma 4 E2B。モデルを設定すると、3人会議を開始できます。", Color.rgb(35,39,47))
+        addBubble("SYSTEM", "Qwen3.5 2B (llama.cpp) + Gemma 4 E2B (LiteRT-LM)。両方ロードすると3人会議を開始できます。", Color.rgb(35,39,47))
 
         val bottom = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.BOTTOM }
         input = EditText(this).apply {
@@ -110,19 +112,22 @@ class MainActivity : AppCompatActivity() {
     private fun showModelDialog() {
         val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(16), dp(8), dp(16), 0) }
         fun button(label: String, action: () -> Unit) = Button(this).apply { text = label; setOnClickListener { action() } }
-        box.addView(TextView(this).apply { text = "Qwen3.5 2B  Q4_K_M  約1.4GB" })
+        box.addView(TextView(this).apply { text = "Qwen3.5 2B  GGUF Q4_K_M  約1.3GB" })
         box.addView(button("Qwenモデルを選択") { qwenPicker.launch(arrayOf("*/*")) })
         box.addView(button("Qwenモデルのダウンロードリンク") { openUrl(QWEN_URL) })
-        box.addView(TextView(this).apply { text = "Gemma 4 E2B  Q4_0  約3.35GB" })
-        box.addView(button("Gemmaモデルを選択") { gemmaPicker.launch(arrayOf("*/*")) })
-        box.addView(button("Gemmaモデルのダウンロードリンク") { openUrl(GEMMA_URL) })
-        box.addView(TextView(this).apply { text = "選んだGGUFはアプリ領域へコピーされます。Thinking/CoTは使いません。" })
+        box.addView(TextView(this).apply { text = "Gemma 4 E2B  LiteRT-LM  約2.59GB" })
+        box.addView(button("Gemma .litertlm を選択") { gemmaPicker.launch(arrayOf("*/*")) })
+        box.addView(button("Gemma LiteRT-LMのダウンロードリンク") { openUrl(GEMMA_URL) })
+        box.addView(TextView(this).apply { text = "QwenはGGUF、Gemmaは .litertlm を使用します。Thinking/CoTは両方OFFです。旧Gemma GGUFは使用しません。" })
         AlertDialog.Builder(this).setTitle("モデル設定").setView(box).setPositiveButton("閉じる", null).show()
     }
 
     private fun openUrl(url: String) = startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
 
-    private fun modelFile(isQwen: Boolean) = File(File(filesDir, "models").apply { mkdirs() }, if (isQwen) "qwen.gguf" else "gemma.gguf")
+    private fun modelFile(isQwen: Boolean) = File(
+        File(filesDir, "models").apply { mkdirs() },
+        if (isQwen) "qwen.gguf" else "gemma-4-E2B-it.litertlm"
+    )
 
     private fun importModel(uri: Uri, isQwen: Boolean) {
         val label = if (isQwen) "Qwen" else "Gemma"
@@ -132,10 +137,12 @@ class MainActivity : AppCompatActivity() {
                 val file = withContext(Dispatchers.IO) {
                     val out = modelFile(isQwen)
                     contentResolver.openInputStream(uri)!!.use { input -> out.outputStream().buffered().use { output -> input.copyTo(output, 1024 * 1024) } }
-                    require(out.length() > 100_000_000L) { "ファイルが小さすぎます。GGUF本体を選んでください" }
+                    require(out.length() > 100_000_000L) {
+                        if (isQwen) "ファイルが小さすぎます。GGUF本体を選んでください" else "ファイルが小さすぎます。.litertlm本体を選んでください"
+                    }
                     out
                 }
-                logs.i(label, "model imported ${file.length()} bytes")
+                logs.i(label, "model imported ${file.length()} bytes path=${file.name}")
                 loadOne(isQwen)
             } catch (t: Throwable) {
                 logs.i(label, t.stackTraceToString())

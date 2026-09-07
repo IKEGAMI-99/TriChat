@@ -5,6 +5,7 @@
 
     <application
         android:allowBackup="true"
+        android:extractNativeLibs="true"
         android:label="TriChat"
         android:theme="@style/Theme.TriChat">
 

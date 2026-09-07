@@ -31,5 +31,17 @@ if (!llamaDir.exists()) {
     run("git", "-C", llamaDir.absolutePath, "checkout", "FETCH_HEAD")
 }
 
+// TriChat is distributed for modern Android phones, so avoid spending CI time
+// compiling an unused x86_64 native backend from the upstream Android sample.
+val llamaAndroidBuild = file("third_party/llama.cpp/examples/llama.android/lib/build.gradle.kts")
+if (llamaAndroidBuild.exists()) {
+    val original = llamaAndroidBuild.readText()
+    val patched = original.replace(
+        "abiFilters += listOf(\"arm64-v8a\", \"x86_64\")",
+        "abiFilters += listOf(\"arm64-v8a\")"
+    )
+    if (patched != original) llamaAndroidBuild.writeText(patched)
+}
+
 include(":llama-android-lib")
 project(":llama-android-lib").projectDir = file("third_party/llama.cpp/examples/llama.android/lib")

@@ -42,36 +42,18 @@ if (llamaAndroidBuild.exists()) {
     if (patched != original) llamaAndroidBuild.writeText(patched)
 }
 
-// Two models run in separate processes. 4K context keeps KV-cache pressure lower
-// and is a better fit for TriChat's short, speed-first meeting turns.
-// The stock Android helper also formats chat through the legacy route. Qwen3.5
-// expects the Jinja template for its non-thinking default, so force Jinja here.
+// Keep the stable stock Android chat-template path. The v0.1.6 Jinja/non-thinking
+// patch made Qwen's native process crash during model preparation on the target
+// phone. Only reduce the context size here; CoT suppression is handled safely in
+// the app layer so the native runtime remains unchanged.
 val aiChatCpp = file("third_party/llama.cpp/examples/llama.android/lib/src/main/cpp/ai_chat.cpp")
 if (aiChatCpp.exists()) {
     val original = aiChatCpp.readText()
-    val patched = original
-        .replace(
-            "constexpr int   DEFAULT_CONTEXT_SIZE    = 8192;",
-            "constexpr int   DEFAULT_CONTEXT_SIZE    = 4096;"
-        )
-        .replace(
-            "role == ROLE_USER, /* use_jinja */ false",
-            "role == ROLE_USER, /* use_jinja */ true"
-        )
-    if (patched != original) aiChatCpp.writeText(patched)
-}
-
-// Qwen3.5-2B is a non-thinking model by default when its Jinja chat template is
-// applied with enable_thinking=false. The Android helper has no public switch for
-// this, so change the local default in the fetched llama.cpp copy.
-val chatHeader = file("third_party/llama.cpp/common/chat.h")
-if (chatHeader.exists()) {
-    val original = chatHeader.readText()
     val patched = original.replace(
-        "bool                                  enable_thinking     = true;",
-        "bool                                  enable_thinking     = false;"
+        "constexpr int   DEFAULT_CONTEXT_SIZE    = 8192;",
+        "constexpr int   DEFAULT_CONTEXT_SIZE    = 4096;"
     )
-    if (patched != original) chatHeader.writeText(patched)
+    if (patched != original) aiChatCpp.writeText(patched)
 }
 
 include(":llama-android-lib")

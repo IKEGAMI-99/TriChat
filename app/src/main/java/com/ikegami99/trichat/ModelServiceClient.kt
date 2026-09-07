@@ -17,12 +17,19 @@ class ModelServiceClient(
     private val context: Context,
     private val serviceClass: KClass<out Service>,
     private val label: String,
-    private val logs: LogStore
+    private val logs: LogStore,
+    private val important: Boolean = false,
+    private val autoRestoreAfterCrash: Boolean = false,
 ) {
     private data class PendingLoad(
         val path: String,
         val systemPrompt: String,
         val callback: (Boolean, String?) -> Unit,
+    )
+
+    private data class LoadSpec(
+        val path: String,
+        val systemPrompt: String,
     )
 
     var isBound = false; private set
@@ -32,6 +39,8 @@ class ModelServiceClient(
     private var tokenCallback: ((String) -> Unit)? = null
     private var doneCallback: ((String?) -> Unit)? = null
     private var pendingLoad: PendingLoad? = null
+    private var activeLoadSpec: LoadSpec? = null
+    private var lastSuccessfulLoad: LoadSpec? = null
     private var bindingRequested = false
     private var reconnectScheduled = false
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -40,6 +49,8 @@ class ModelServiceClient(
         when (msg.what) {
             ModelProtocol.MSG_LOADED -> {
                 isLoaded = true
+                activeLoadSpec?.let { lastSuccessfulLoad = it }
+                activeLoadSpec = null
                 logs.i(label, "model loaded")
                 loadCallback?.invoke(true, null)
                 loadCallback = null
@@ -51,6 +62,7 @@ class ModelServiceClient(
                 logs.i(label, "ERROR $err")
                 if (loadCallback != null) {
                     isLoaded = false
+                    activeLoadSpec = null
                     loadCallback?.invoke(false, err)
                     loadCallback = null
                 } else {
@@ -60,6 +72,16 @@ class ModelServiceClient(
         }
         true
     })
+
+    private fun queueRestoreIfNeeded(wasLoaded: Boolean) {
+        if (!autoRestoreAfterCrash || !wasLoaded || pendingLoad != null) return
+        val spec = lastSuccessfulLoad ?: return
+        pendingLoad = PendingLoad(spec.path, spec.systemPrompt) { ok, err ->
+            if (ok) logs.i(label, "model restored after service restart")
+            else logs.i(label, "automatic model restore failed: ${err ?: "unknown error"}")
+        }
+        logs.i(label, "queued automatic model restore after service restart")
+    }
 
     private val connection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
@@ -80,30 +102,36 @@ class ModelServiceClient(
         }
 
         override fun onServiceDisconnected(name: ComponentName?) {
+            val wasLoaded = isLoaded
             remote = null
             isBound = false
             isLoaded = false
             logs.i(label, "service disconnected")
+            queueRestoreIfNeeded(wasLoaded)
             failInFlight("$label service disconnected during request")
             scheduleReconnect()
         }
 
         override fun onBindingDied(name: ComponentName?) {
+            val wasLoaded = isLoaded
             remote = null
             isBound = false
             isLoaded = false
             bindingRequested = false
             logs.i(label, "service binding died")
+            queueRestoreIfNeeded(wasLoaded)
             failInFlight("$label service binding died during request")
             scheduleReconnect()
         }
 
         override fun onNullBinding(name: ComponentName?) {
+            val wasLoaded = isLoaded
             remote = null
             isBound = false
             isLoaded = false
             bindingRequested = false
             logs.i(label, "service returned null binding")
+            queueRestoreIfNeeded(wasLoaded)
             failInFlight("$label service returned null binding")
             scheduleReconnect()
         }
@@ -114,7 +142,9 @@ class ModelServiceClient(
     fun bind(onConnected: () -> Unit) {
         this.onConnected = onConnected
         if (isBound || bindingRequested) return
-        bindingRequested = context.bindService(Intent(context, serviceClass.java), connection, Context.BIND_AUTO_CREATE)
+        var flags = Context.BIND_AUTO_CREATE
+        if (important) flags = flags or Context.BIND_IMPORTANT
+        bindingRequested = context.bindService(Intent(context, serviceClass.java), connection, flags)
         if (!bindingRequested) logs.i(label, "bindService returned false")
     }
 
@@ -140,6 +170,7 @@ class ModelServiceClient(
     private fun failInFlight(reason: String) {
         val load = loadCallback
         loadCallback = null
+        activeLoadSpec = null
         if (load != null) load(false, reason)
         finishGeneration(reason)
     }
@@ -153,6 +184,7 @@ class ModelServiceClient(
             return
         }
         loadCallback = callback
+        activeLoadSpec = LoadSpec(path, systemPrompt)
         val data = Bundle().apply {
             putString(ModelProtocol.KEY_PATH, path)
             putString(ModelProtocol.KEY_SYSTEM, systemPrompt)
@@ -164,6 +196,7 @@ class ModelServiceClient(
             isBound = false
             isLoaded = false
             loadCallback = null
+            activeLoadSpec = null
             pendingLoad = PendingLoad(path, systemPrompt, callback)
             logs.i(label, "load send failed; queued for reconnect: ${it.message}")
             scheduleReconnect()
@@ -200,6 +233,8 @@ class ModelServiceClient(
         isLoaded = false
         remote = null
         pendingLoad = null
+        activeLoadSpec = null
+        lastSuccessfulLoad = null
         loadCallback = null
         tokenCallback = null
         doneCallback = null

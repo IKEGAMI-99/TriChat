@@ -12,8 +12,8 @@ android {
         applicationId = "com.ikegami99.trichat"
         minSdk = 33
         targetSdk = 36
-        versionCode = 4
-        versionName = "0.1.3"
+        versionCode = 5
+        versionName = "0.1.4"
     }
 
     buildFeatures {
@@ -21,10 +21,7 @@ android {
     }
 
     // llama.cpp's Android CPU dispatcher scans applicationInfo.nativeLibraryDir
-    // for libggml-cpu-*.so variants. Modern AGP normally leaves native libs
-    // mmap-able inside the APK instead of extracting them to that directory,
-    // which makes backend discovery silently fail and every GGUF load return null.
-    // Force real on-disk extraction so ggml_backend_load_all_from_path() can see them.
+    // for libggml-cpu-*.so variants, so these must be extracted on install.
     packaging {
         jniLibs {
             useLegacyPackaging = true
@@ -52,17 +49,22 @@ android {
     }
 
     compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_17
-        targetCompatibility = JavaVersion.VERSION_17
+        sourceCompatibility = JavaVersion.VERSION_21
+        targetCompatibility = JavaVersion.VERSION_21
     }
 }
 
 kotlin {
-    jvmToolchain(17)
+    jvmToolchain(21)
 }
 
 dependencies {
+    // Qwen3.5 stays on llama.cpp/GGUF.
     implementation(project(":llama-android-lib"))
+
+    // Gemma 4 E2B uses Google's Android-first LiteRT-LM runtime.
+    implementation("com.google.ai.edge.litertlm:litertlm-android:0.16.1")
+
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.appcompat)
     implementation(libs.androidx.activity.ktx)
